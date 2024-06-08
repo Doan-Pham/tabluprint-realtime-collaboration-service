@@ -74,6 +74,7 @@ type UpdateSelectionRequest struct {
 
 func initHandler(w http.ResponseWriter, r *http.Request) {
 	clientID := uuid.New().String()
+	log.Printf("[RTCS] /init for client %s:", clientID)
 	response := InitResponse{ClientID: clientID}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -83,6 +84,8 @@ func updateSelectionHandler(w http.ResponseWriter, r *http.Request) {
 	var req UpdateSelectionRequest
 	body, _ := io.ReadAll(r.Body)
 	json.Unmarshal(body, &req)
+
+	log.Printf("[RTCS] /updateSelection for client %s; position: %s", req.ClientID, req.Position)
 
 	UpdateClientPosition(globalSession, req.ClientID, req.Position)
 	broadcastUpdate(globalSession)
@@ -96,7 +99,7 @@ func broadcastUpdate(session *Session) {
 	for _, client := range session.Clients {
 		err := client.Conn.WriteJSON(session.Clients)
 		if err != nil {
-			log.Printf("[RTCS] Broadcast update for client : - error: %v", err)
+			log.Printf("[RTCS] Broadcast update for client %s: - error: %v", client.ID, err)
 			client.Conn.Close()
 			delete(session.Clients, client.ID)
 		}
