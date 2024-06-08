@@ -40,7 +40,7 @@ func main() {
 	r.Use(corsMiddleware)
 
 	r.HandleFunc("/init", initHandler).Methods("POST")
-	r.HandleFunc("/updateSelection", updateSelectionHandler).Methods("POST")
+	r.HandleFunc("/updateSelection", updateSelectionHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/ws/{clientId}", wsHandler)
 	http.Handle("/", r)
 	log.Println("Server started on :4949")
@@ -85,9 +85,13 @@ func initHandler(w http.ResponseWriter, r *http.Request) {
 func updateSelectionHandler(w http.ResponseWriter, r *http.Request) {
 	var req UpdateSelectionRequest
 	body, _ := io.ReadAll(r.Body)
-	json.Unmarshal(body, &req)
-
+	err := json.Unmarshal(body, &req)
 	log.Printf("[RTCS] /updateSelection for client %s; position: %s", req.ClientID, req.Position)
+
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
 
 	UpdateClientPosition(globalSession, req.ClientID, req.Position)
 	broadcastUpdate(globalSession)
