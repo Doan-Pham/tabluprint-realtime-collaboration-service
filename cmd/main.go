@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+
+	"cloud.google.com/go/logging"
 )
 
 // Client represents a single connection from a client
@@ -35,13 +39,47 @@ var globalSession = &Session{
 	Clients: make(map[string]*Client),
 }
 
+var (
+	// Logger is the global logger for the application.
+	Logger *logging.Logger
+)
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
 }
 
+// InitLogger initializes the global logger
+func InitLogger(projectID, logName string) {
+	ctx := context.Background()
+
+	// Creates a client.
+	client, err := logging.NewClient(ctx, projectID)
+	if err != nil {
+		log.Fatalf("Failed to create client: %v", err)
+	}
+	// Sets the global Logger to be used throughout the application.
+	Logger = client.Logger(logName)
+}
+
+func Log(message string) {
+	Logger.Log(logging.Entry{Payload: message})
+}
+
+// Must be called to properly flush the log entries.
+func Close() {
+	if Logger != nil {
+		Logger.Flush()
+	}
+}
+
 func main() {
+	// Initialize the logger
+	credentialPath := "./cmd/tabluprint-242d321299b4.json"
+	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credentialPath)
+
+	InitLogger("tabluprint", "tabluprint")
 	r := mux.NewRouter()
 	r.Use(corsMiddleware)
 
@@ -49,7 +87,7 @@ func main() {
 	r.HandleFunc("/updateSelection", updateSelectionHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/ws/{clientId}", wsHandler)
 	http.Handle("/", r)
-	log.Println("Server started on :4949")
+	Log("Server started on :4949")
 	log.Fatal(http.ListenAndServe(":4949", nil))
 }
 
@@ -82,7 +120,7 @@ type UpdateSelectionRequest struct {
 
 func initHandler(w http.ResponseWriter, r *http.Request) {
 	clientID := uuid.New().String()
-	log.Printf("[RTCS] /init for client %s:", clientID)
+	Log("[RTCS] /init for client " + clientID)
 	response := InitResponse{ClientID: clientID}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -92,7 +130,7 @@ func updateSelectionHandler(w http.ResponseWriter, r *http.Request) {
 	var req UpdateSelectionRequest
 	body, _ := io.ReadAll(r.Body)
 	err := json.Unmarshal(body, &req)
-	log.Printf("[RTCS] /updateSelection for client %s; position: %s", req.ClientID, req.Position)
+	Log("[RTCS] /updateSelection for client " + req.ClientID + "; position: %s" + req.Position)
 
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
@@ -110,10 +148,10 @@ func broadcastUpdate(session *Session) {
 	defer session.Mutex.Unlock()
 	for _, client := range session.Clients {
 		err := client.Conn.WriteJSON(session.Clients)
-		log.Printf("[RTCS] Broadcast update for client %s:", client.ID)
+		Log("[RTCS] Broadcast update for client" + client.ID)
 
 		if err != nil {
-			log.Printf("[RTCS] Broadcast update for client %s: - error: %v", client.ID, err)
+			Log("[RTCS] Broadcast update for client" + client.ID + "-err:" + err.Error())
 			client.Conn.Close()
 			delete(session.Clients, client.ID)
 		}
@@ -126,11 +164,11 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("[RTCS] /ws/"+clientID+"(WebSocket upgrade error:)", err)
+		Log("[RTCS] /ws/" + clientID + "(WebSocket upgrade error:)" + err.Error())
 		return
 	}
 
-	log.Println("[RTCS] /ws/" + clientID + "(WebSocket established)")
+	Log("[RTCS] /ws/" + clientID + "(WebSocket established)")
 	client := &Client{ID: clientID, Conn: conn}
 
 	RegisterClient(globalSession, clientID, conn)
@@ -142,7 +180,7 @@ func handleClientMessages(client *Client, session *Session) {
 	for {
 		_, msg, err := client.Conn.ReadMessage()
 		if err != nil {
-			log.Printf("Error reading message: %v", err)
+			Log("Error reading message:" + err.Error())
 			delete(session.Clients, client.ID)
 			break
 		}
@@ -151,7 +189,7 @@ func handleClientMessages(client *Client, session *Session) {
 		if err := json.Unmarshal(msg, &edit); err == nil {
 			broadcastEdit(session, edit)
 		} else {
-			log.Printf("Error unmarshaling edit data: %v", err)
+			Log("Error unmarshaling edit data:" + err.Error())
 		}
 	}
 }
@@ -163,7 +201,7 @@ func broadcastEdit(session *Session, edit EditData) {
 		if otherClient.ID != edit.ClientID {
 			err := otherClient.Conn.WriteJSON(edit)
 			if err != nil {
-				log.Printf("Error sending edit to client %s: %v", otherClient.ID, err)
+				Log("Error sending edit to client " + otherClient.ID + "-error:" + err.Error())
 				otherClient.Conn.Close()
 				delete(session.Clients, otherClient.ID)
 			}
