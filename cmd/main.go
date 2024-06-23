@@ -25,6 +25,12 @@ type Session struct {
 	Mutex   sync.Mutex
 }
 
+type EditData struct {
+	ClientID string `json:"clientId"`
+	Position string `json:"position"`
+	Value    string `json:"value"`
+}
+
 var globalSession = &Session{
 	Clients: make(map[string]*Client),
 }
@@ -125,7 +131,44 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Println("[RTCS] /ws/" + clientID + "(WebSocket established)")
+	client := &Client{ID: clientID, Conn: conn}
+
 	RegisterClient(globalSession, clientID, conn)
+	handleClientMessages(client, globalSession)
+}
+
+func handleClientMessages(client *Client, session *Session) {
+	defer client.Conn.Close()
+	for {
+		_, msg, err := client.Conn.ReadMessage()
+		if err != nil {
+			log.Printf("Error reading message: %v", err)
+			delete(session.Clients, client.ID)
+			break
+		}
+
+		var edit EditData
+		if err := json.Unmarshal(msg, &edit); err == nil {
+			broadcastEdit(session, edit)
+		} else {
+			log.Printf("Error unmarshaling edit data: %v", err)
+		}
+	}
+}
+
+func broadcastEdit(session *Session, edit EditData) {
+	session.Mutex.Lock()
+	defer session.Mutex.Unlock()
+	for _, otherClient := range session.Clients {
+		if otherClient.ID != edit.ClientID {
+			err := otherClient.Conn.WriteJSON(edit)
+			if err != nil {
+				log.Printf("Error sending edit to client %s: %v", otherClient.ID, err)
+				otherClient.Conn.Close()
+				delete(session.Clients, otherClient.ID)
+			}
+		}
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
