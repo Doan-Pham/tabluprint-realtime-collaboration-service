@@ -104,6 +104,8 @@ func broadcastUpdate(session *Session) {
 	defer session.Mutex.Unlock()
 	for _, client := range session.Clients {
 		err := client.Conn.WriteJSON(session.Clients)
+		log.Printf("[RTCS] Broadcast update for client %s:", client.ID)
+
 		if err != nil {
 			log.Printf("[RTCS] Broadcast update for client %s: - error: %v", client.ID, err)
 			client.Conn.Close()
